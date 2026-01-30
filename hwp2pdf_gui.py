@@ -3,7 +3,6 @@
 
 import os
 import platform
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -462,10 +461,6 @@ class HwpToPdfApp:
         fail = 0
         failed_names = []
 
-        # 임시 사용자 프로필 디렉토리 생성 (LibreOffice 인스턴스 lock 충돌 방지)
-        tmp_profile = tempfile.mkdtemp(prefix="hwp2pdf_profile_")
-        profile_url = "file:///" + tmp_profile.replace("\\", "/")
-
         self.root.after(0, lambda: self.progress.config(maximum=total, value=0))
         self.root.after(0, lambda: self.lbl_status.config(text=f"변환 중... 0/{total}"))
 
@@ -490,7 +485,6 @@ class HwpToPdfApp:
                     soffice,
                     "--headless",
                     "--norestore",
-                    f"-env:UserInstallation={profile_url}",
                     "--convert-to", "pdf",
                     "--outdir", outdir,
                     filepath,
@@ -498,23 +492,16 @@ class HwpToPdfApp:
                 result = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=120,
                 )
+                stdout_msg = result.stdout.strip() if result.stdout else ""
+                stderr_msg = result.stderr.strip() if result.stderr else ""
+
                 if result.returncode == 0 and os.path.isfile(expected_pdf):
                     success += 1
                     self.root.after(0, lambda p=expected_pdf: self._log(f"  -> 완료: {p}"))
-                elif result.returncode == 0:
-                    # returncode 0이지만 PDF 미생성
-                    fail += 1
-                    failed_names.append(name)
-                    stderr_msg = result.stderr.strip() if result.stderr else ""
-                    stdout_msg = result.stdout.strip() if result.stdout else ""
-                    detail = stderr_msg or stdout_msg or "PDF 파일이 생성되지 않음"
-                    self.root.after(0, lambda d=detail: self._log(f"  -> 실패 (PDF 미생성): {d}"))
                 else:
                     fail += 1
                     failed_names.append(name)
-                    stderr_msg = result.stderr.strip() if result.stderr else ""
-                    stdout_msg = result.stdout.strip() if result.stdout else ""
-                    detail = stderr_msg or stdout_msg or f"종료코드: {result.returncode}"
+                    detail = stderr_msg or stdout_msg or f"PDF 미생성 (종료코드: {result.returncode})"
                     self.root.after(0, lambda d=detail: self._log(f"  -> 실패: {d}"))
             except subprocess.TimeoutExpired:
                 fail += 1
@@ -526,9 +513,6 @@ class HwpToPdfApp:
                 self.root.after(0, lambda n=name, e=e: self._log(f"  -> 오류: {e}"))
 
             self.root.after(0, lambda v=i + 1: self.progress.config(value=v))
-
-        # 임시 프로필 정리
-        shutil.rmtree(tmp_profile, ignore_errors=True)
 
         # 완료
         summary = f"완료! 성공: {success}, 실패: {fail} / 총 {total}개"
