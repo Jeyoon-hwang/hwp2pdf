@@ -3,6 +3,7 @@
 
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -461,6 +462,10 @@ class HwpToPdfApp:
         fail = 0
         failed_names = []
 
+        # 임시 사용자 프로필 디렉토리 생성 (LibreOffice 인스턴스 lock 충돌 방지)
+        tmp_profile = tempfile.mkdtemp(prefix="hwp2pdf_profile_")
+        profile_url = "file:///" + tmp_profile.replace("\\", "/")
+
         self.root.after(0, lambda: self.progress.config(maximum=total, value=0))
         self.root.after(0, lambda: self.lbl_status.config(text=f"변환 중... 0/{total}"))
 
@@ -480,10 +485,26 @@ class HwpToPdfApp:
             base_name = os.path.splitext(name)[0]
             expected_pdf = os.path.join(outdir, base_name + ".pdf")
 
+            # HWP/HWPX 입력 필터 결정
+            ext = os.path.splitext(name)[1].lower()
+            if ext == ".hwpx":
+                infilter = "HWPX File"
+            else:
+                infilter = "HWP File"
+
             try:
+                cmd = [
+                    soffice,
+                    "--headless",
+                    "--norestore",
+                    f"-env:UserInstallation={profile_url}",
+                    f"--infilter={infilter}",
+                    "--convert-to", "pdf",
+                    "--outdir", outdir,
+                    filepath,
+                ]
                 result = subprocess.run(
-                    [soffice, "--headless", "--convert-to", "pdf", "--outdir", outdir, filepath],
-                    capture_output=True, text=True, timeout=120,
+                    cmd, capture_output=True, text=True, timeout=120,
                 )
                 if result.returncode == 0 and os.path.isfile(expected_pdf):
                     success += 1
@@ -513,6 +534,9 @@ class HwpToPdfApp:
                 self.root.after(0, lambda n=name, e=e: self._log(f"  -> 오류: {e}"))
 
             self.root.after(0, lambda v=i + 1: self.progress.config(value=v))
+
+        # 임시 프로필 정리
+        shutil.rmtree(tmp_profile, ignore_errors=True)
 
         # 완료
         summary = f"완료! 성공: {success}, 실패: {fail} / 총 {total}개"
