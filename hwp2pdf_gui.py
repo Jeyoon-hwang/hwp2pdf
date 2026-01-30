@@ -106,6 +106,144 @@ def download_and_install_libreoffice(status_callback=None):
     return True
 
 
+class MultiFolderDialog:
+    """여러 폴더를 한 번에 선택할 수 있는 커스텀 다이얼로그"""
+
+    def __init__(self, parent, title="폴더 선택"):
+        self.result = []
+
+        self.dlg = tk.Toplevel(parent)
+        self.dlg.title(title)
+        self.dlg.geometry("600x500")
+        self.dlg.minsize(400, 300)
+        self.dlg.transient(parent)
+        self.dlg.grab_set()
+
+        # --- 상단: 현재 경로 & 이동 ---
+        nav_frame = ttk.Frame(self.dlg)
+        nav_frame.pack(fill="x", padx=8, pady=(8, 4))
+
+        ttk.Label(nav_frame, text="경로:").pack(side="left")
+        self.var_path = tk.StringVar(value=os.path.expanduser("~"))
+        self.entry_path = ttk.Entry(nav_frame, textvariable=self.var_path)
+        self.entry_path.pack(side="left", fill="x", expand=True, padx=(4, 4))
+        ttk.Button(nav_frame, text="이동", command=self._navigate).pack(side="left")
+        ttk.Button(nav_frame, text="상위 폴더", command=self._go_up).pack(side="left", padx=(4, 0))
+
+        # --- 중간 왼쪽: 폴더 트리 ---
+        mid_frame = ttk.Frame(self.dlg)
+        mid_frame.pack(fill="both", expand=True, padx=8, pady=4)
+
+        left_frame = ttk.LabelFrame(mid_frame, text="폴더 탐색 (Ctrl/Shift+클릭으로 다중 선택)")
+        left_frame.pack(side="left", fill="both", expand=True, padx=(0, 4))
+
+        self.tree = tk.Listbox(left_frame, selectmode="extended", height=15)
+        tree_scroll = ttk.Scrollbar(left_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=tree_scroll.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        tree_scroll.pack(side="right", fill="y")
+        self.tree.bind("<Double-1>", self._on_double_click)
+
+        # --- 중간 버튼 ---
+        btn_mid = ttk.Frame(mid_frame)
+        btn_mid.pack(side="left", padx=4)
+        ttk.Button(btn_mid, text="추가 →", command=self._add_selected).pack(pady=2)
+        ttk.Button(btn_mid, text="← 제거", command=self._remove_selected).pack(pady=2)
+        ttk.Button(btn_mid, text="현재 폴더\n추가 →", command=self._add_current).pack(pady=(10, 2))
+
+        # --- 중간 오른쪽: 선택된 폴더 목록 ---
+        right_frame = ttk.LabelFrame(mid_frame, text="선택된 폴더")
+        right_frame.pack(side="left", fill="both", expand=True, padx=(4, 0))
+
+        self.selected_list = tk.Listbox(right_frame, selectmode="extended", height=15)
+        sel_scroll = ttk.Scrollbar(right_frame, orient="vertical", command=self.selected_list.yview)
+        self.selected_list.configure(yscrollcommand=sel_scroll.set)
+        self.selected_list.pack(side="left", fill="both", expand=True)
+        sel_scroll.pack(side="right", fill="y")
+
+        # --- 하단 버튼 ---
+        bottom = ttk.Frame(self.dlg)
+        bottom.pack(fill="x", padx=8, pady=8)
+        ttk.Button(bottom, text="확인", command=self._ok).pack(side="right", padx=(4, 0))
+        ttk.Button(bottom, text="취소", command=self._cancel).pack(side="right")
+
+        self._selected_folders = []
+        self._populate(self.var_path.get())
+
+        self.dlg.wait_window()
+
+    def _populate(self, path):
+        """지정 경로의 하위 폴더 목록을 표시"""
+        self.tree.delete(0, "end")
+        self.var_path.set(path)
+        try:
+            entries = sorted(os.listdir(path), key=str.lower)
+            for e in entries:
+                full = os.path.join(path, e)
+                if os.path.isdir(full) and not e.startswith("."):
+                    self.tree.insert("end", e)
+        except PermissionError:
+            self.tree.insert("end", "(접근 권한 없음)")
+
+    def _navigate(self):
+        p = self.var_path.get().strip()
+        if os.path.isdir(p):
+            self._populate(p)
+
+    def _go_up(self):
+        cur = self.var_path.get()
+        parent = os.path.dirname(cur)
+        if parent and parent != cur:
+            self._populate(parent)
+
+    def _on_double_click(self, event):
+        sel = self.tree.curselection()
+        if not sel:
+            return
+        name = self.tree.get(sel[0])
+        if name == "(접근 권한 없음)":
+            return
+        full = os.path.join(self.var_path.get(), name)
+        if os.path.isdir(full):
+            self._populate(full)
+
+    def _add_selected(self):
+        """왼쪽에서 선택한 폴더를 오른쪽 목록에 추가"""
+        sel = self.tree.curselection()
+        base = self.var_path.get()
+        for i in sel:
+            name = self.tree.get(i)
+            if name == "(접근 권한 없음)":
+                continue
+            full = os.path.join(base, name)
+            if full not in self._selected_folders:
+                self._selected_folders.append(full)
+                self.selected_list.insert("end", full)
+
+    def _add_current(self):
+        """현재 경로 자체를 오른쪽 목록에 추가"""
+        cur = self.var_path.get()
+        if cur and cur not in self._selected_folders:
+            self._selected_folders.append(cur)
+            self.selected_list.insert("end", cur)
+
+    def _remove_selected(self):
+        """오른쪽 목록에서 선택한 항목 제거"""
+        sel = list(self.selected_list.curselection())
+        sel.reverse()
+        for i in sel:
+            self._selected_folders.pop(i)
+            self.selected_list.delete(i)
+
+    def _ok(self):
+        self.result = list(self._selected_folders)
+        self.dlg.destroy()
+
+    def _cancel(self):
+        self.result = []
+        self.dlg.destroy()
+
+
 class HwpToPdfApp:
     def __init__(self, root):
         self.root = root
@@ -209,13 +347,14 @@ class HwpToPdfApp:
         self._append_files(paths)
 
     def _add_folder(self):
-        folder = filedialog.askdirectory(title="HWP 파일이 있는 폴더 선택")
-        if not folder:
+        dialog = MultiFolderDialog(self.root, title="HWP 파일이 있는 폴더 선택")
+        if not dialog.result:
             return
         found = []
-        for f in os.listdir(folder):
-            if f.lower().endswith((".hwp", ".hwpx")):
-                found.append(os.path.join(folder, f))
+        for folder in dialog.result:
+            for f in os.listdir(folder):
+                if f.lower().endswith((".hwp", ".hwpx")):
+                    found.append(os.path.join(folder, f))
         found.sort()
         self._append_files(found)
 
@@ -334,18 +473,36 @@ class HwpToPdfApp:
                 self._log(f"[{idx + 1}/{total}] {n} ..."),
             ))
 
+            # 변환 전 출력 폴더 확인/생성
+            os.makedirs(outdir, exist_ok=True)
+
+            # 예상 PDF 파일 경로
+            base_name = os.path.splitext(name)[0]
+            expected_pdf = os.path.join(outdir, base_name + ".pdf")
+
             try:
                 result = subprocess.run(
                     [soffice, "--headless", "--convert-to", "pdf", "--outdir", outdir, filepath],
                     capture_output=True, text=True, timeout=120,
                 )
-                if result.returncode == 0:
+                if result.returncode == 0 and os.path.isfile(expected_pdf):
                     success += 1
-                    self.root.after(0, lambda n=name: self._log(f"  -> 완료"))
+                    self.root.after(0, lambda p=expected_pdf: self._log(f"  -> 완료: {p}"))
+                elif result.returncode == 0:
+                    # returncode 0이지만 PDF 미생성
+                    fail += 1
+                    failed_names.append(name)
+                    stderr_msg = result.stderr.strip() if result.stderr else ""
+                    stdout_msg = result.stdout.strip() if result.stdout else ""
+                    detail = stderr_msg or stdout_msg or "PDF 파일이 생성되지 않음"
+                    self.root.after(0, lambda d=detail: self._log(f"  -> 실패 (PDF 미생성): {d}"))
                 else:
                     fail += 1
                     failed_names.append(name)
-                    self.root.after(0, lambda n=name: self._log(f"  -> 실패"))
+                    stderr_msg = result.stderr.strip() if result.stderr else ""
+                    stdout_msg = result.stdout.strip() if result.stdout else ""
+                    detail = stderr_msg or stdout_msg or f"종료코드: {result.returncode}"
+                    self.root.after(0, lambda d=detail: self._log(f"  -> 실패: {d}"))
             except subprocess.TimeoutExpired:
                 fail += 1
                 failed_names.append(name)
