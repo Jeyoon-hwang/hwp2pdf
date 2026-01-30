@@ -473,18 +473,36 @@ class HwpToPdfApp:
                 self._log(f"[{idx + 1}/{total}] {n} ..."),
             ))
 
+            # 변환 전 출력 폴더 확인/생성
+            os.makedirs(outdir, exist_ok=True)
+
+            # 예상 PDF 파일 경로
+            base_name = os.path.splitext(name)[0]
+            expected_pdf = os.path.join(outdir, base_name + ".pdf")
+
             try:
                 result = subprocess.run(
                     [soffice, "--headless", "--convert-to", "pdf", "--outdir", outdir, filepath],
                     capture_output=True, text=True, timeout=120,
                 )
-                if result.returncode == 0:
+                if result.returncode == 0 and os.path.isfile(expected_pdf):
                     success += 1
-                    self.root.after(0, lambda n=name: self._log(f"  -> 완료"))
+                    self.root.after(0, lambda p=expected_pdf: self._log(f"  -> 완료: {p}"))
+                elif result.returncode == 0:
+                    # returncode 0이지만 PDF 미생성
+                    fail += 1
+                    failed_names.append(name)
+                    stderr_msg = result.stderr.strip() if result.stderr else ""
+                    stdout_msg = result.stdout.strip() if result.stdout else ""
+                    detail = stderr_msg or stdout_msg or "PDF 파일이 생성되지 않음"
+                    self.root.after(0, lambda d=detail: self._log(f"  -> 실패 (PDF 미생성): {d}"))
                 else:
                     fail += 1
                     failed_names.append(name)
-                    self.root.after(0, lambda n=name: self._log(f"  -> 실패"))
+                    stderr_msg = result.stderr.strip() if result.stderr else ""
+                    stdout_msg = result.stdout.strip() if result.stdout else ""
+                    detail = stderr_msg or stdout_msg or f"종료코드: {result.returncode}"
+                    self.root.after(0, lambda d=detail: self._log(f"  -> 실패: {d}"))
             except subprocess.TimeoutExpired:
                 fail += 1
                 failed_names.append(name)
