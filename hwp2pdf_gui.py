@@ -2,29 +2,39 @@
 """HWP/HWPX → PDF 대량 변환 GUI 앱"""
 
 import os
+import platform
 import subprocess
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-SOFFICE_PATHS = [
+IS_WINDOWS = platform.system() == "Windows"
+
+SOFFICE_PATHS_MAC = [
     "/Applications/LibreOffice.app/Contents/MacOS/soffice",
     "/usr/bin/soffice",
     "/usr/local/bin/soffice",
 ]
 
+SOFFICE_PATHS_WIN = [
+    os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "LibreOffice", "program", "soffice.exe"),
+    os.path.join(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"), "LibreOffice", "program", "soffice.exe"),
+]
+
 
 def find_soffice():
-    for p in SOFFICE_PATHS:
-        if os.path.isfile(p) and os.access(p, os.X_OK):
+    candidates = SOFFICE_PATHS_WIN if IS_WINDOWS else SOFFICE_PATHS_MAC
+    for p in candidates:
+        if os.path.isfile(p):
             return p
     # PATH에서 찾기
     try:
+        cmd = "where" if IS_WINDOWS else "which"
         result = subprocess.run(
-            ["which", "soffice"], capture_output=True, text=True, timeout=5
+            [cmd, "soffice"], capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            return result.stdout.strip().splitlines()[0]
     except Exception:
         pass
     return None
@@ -106,7 +116,8 @@ class HwpToPdfApp:
         log_frame = ttk.Frame(frame_prog)
         log_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
-        self.log_text = tk.Text(log_frame, height=6, state="disabled", font=("Menlo", 11))
+        log_font = ("Consolas", 10) if IS_WINDOWS else ("Menlo", 11)
+        self.log_text = tk.Text(log_frame, height=6, state="disabled", font=log_font)
         log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=log_scroll.set)
         self.log_text.pack(side="left", fill="both", expand=True)
@@ -174,12 +185,18 @@ class HwpToPdfApp:
 
         soffice = find_soffice()
         if not soffice:
-            messagebox.showerror(
-                "오류",
-                "LibreOffice가 설치되어 있지 않습니다.\n\n"
-                "터미널에서 다음 명령어로 설치하세요:\n"
-                "  brew install --cask libreoffice",
-            )
+            if IS_WINDOWS:
+                install_msg = (
+                    "LibreOffice가 설치되어 있지 않습니다.\n\n"
+                    "https://www.libreoffice.org 에서 다운로드하세요."
+                )
+            else:
+                install_msg = (
+                    "LibreOffice가 설치되어 있지 않습니다.\n\n"
+                    "터미널에서 다음 명령어로 설치하세요:\n"
+                    "  brew install --cask libreoffice"
+                )
+            messagebox.showerror("오류", install_msg)
             return
 
         self.converting = True
