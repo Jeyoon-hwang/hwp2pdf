@@ -4,8 +4,11 @@
 import os
 import platform
 import subprocess
+import sys
+import tempfile
 import threading
 import tkinter as tk
+import urllib.request
 from tkinter import filedialog, messagebox, ttk
 
 IS_WINDOWS = platform.system() == "Windows"
@@ -20,6 +23,14 @@ SOFFICE_PATHS_WIN = [
     os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "LibreOffice", "program", "soffice.exe"),
     os.path.join(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"), "LibreOffice", "program", "soffice.exe"),
 ]
+
+
+LIBREOFFICE_VERSION = "25.2.7"
+LIBREOFFICE_MSI_URL = (
+    f"https://download.documentfoundation.org/libreoffice/stable/"
+    f"{LIBREOFFICE_VERSION}/win/x86_64/"
+    f"LibreOffice_{LIBREOFFICE_VERSION}_Win_x86-64.msi"
+)
 
 
 def find_soffice():
@@ -38,6 +49,61 @@ def find_soffice():
     except Exception:
         pass
     return None
+
+
+def download_and_install_libreoffice(status_callback=None):
+    """Windows에서 LibreOffice MSI를 다운로드하고 자동 설치합니다."""
+    if not IS_WINDOWS:
+        return False
+
+    msi_path = os.path.join(tempfile.gettempdir(), f"LibreOffice_{LIBREOFFICE_VERSION}_Win_x86-64.msi")
+
+    # 다운로드
+    if status_callback:
+        status_callback("LibreOffice 다운로드 중... (약 350MB, 잠시 기다려주세요)")
+
+    try:
+        def _reporthook(block_num, block_size, total_size):
+            downloaded = block_num * block_size
+            if total_size > 0:
+                pct = min(downloaded * 100 // total_size, 100)
+                mb_down = downloaded // (1024 * 1024)
+                mb_total = total_size // (1024 * 1024)
+                if status_callback:
+                    status_callback(f"LibreOffice 다운로드 중... {mb_down}MB / {mb_total}MB ({pct}%)")
+
+        urllib.request.urlretrieve(LIBREOFFICE_MSI_URL, msi_path, reporthook=_reporthook)
+    except Exception as e:
+        if status_callback:
+            status_callback(f"다운로드 실패: {e}")
+        return False
+
+    # 자동 설치 (msiexec /passive = 진행률만 표시, 사용자 입력 불필요)
+    if status_callback:
+        status_callback("LibreOffice 설치 중... (자동 설치, 잠시 기다려주세요)")
+
+    try:
+        result = subprocess.run(
+            ["msiexec", "/i", msi_path, "/passive", "/norestart"],
+            timeout=600,
+        )
+        if result.returncode != 0:
+            if status_callback:
+                status_callback(f"설치 실패 (코드: {result.returncode})")
+            return False
+    except Exception as e:
+        if status_callback:
+            status_callback(f"설치 오류: {e}")
+        return False
+    finally:
+        try:
+            os.remove(msi_path)
+        except OSError:
+            pass
+
+    if status_callback:
+        status_callback("LibreOffice 설치 완료!")
+    return True
 
 
 class HwpToPdfApp:
@@ -186,18 +252,29 @@ class HwpToPdfApp:
         soffice = find_soffice()
         if not soffice:
             if IS_WINDOWS:
-                install_msg = (
+                answer = messagebox.askyesno(
+                    "LibreOffice 설치 필요",
                     "LibreOffice가 설치되어 있지 않습니다.\n\n"
-                    "https://www.libreoffice.org 에서 다운로드하세요."
+                    "자동으로 다운로드하고 설치할까요?\n"
+                    "(약 350MB 다운로드, 자동 설치)",
                 )
+                if answer:
+                    self.converting = True
+                    self.btn_convert.config(state="disabled")
+                    self.log_text.configure(state="normal")
+                    self.log_text.delete("1.0", "end")
+                    self.log_text.configure(state="disabled")
+                    thread = threading.Thread(target=self._install_and_convert, daemon=True)
+                    thread.start()
+                return
             else:
-                install_msg = (
+                messagebox.showerror(
+                    "오류",
                     "LibreOffice가 설치되어 있지 않습니다.\n\n"
                     "터미널에서 다음 명령어로 설치하세요:\n"
-                    "  brew install --cask libreoffice"
+                    "  brew install --cask libreoffice",
                 )
-            messagebox.showerror("오류", install_msg)
-            return
+                return
 
         self.converting = True
         self.btn_convert.config(state="disabled")
@@ -207,6 +284,37 @@ class HwpToPdfApp:
 
         thread = threading.Thread(target=self._convert_worker, args=(soffice,), daemon=True)
         thread.start()
+
+    def _install_and_convert(self):
+        """LibreOffice를 설치한 뒤 변환을 이어서 실행합니다."""
+        def _status(msg):
+            self.root.after(0, lambda: self.lbl_status.config(text=msg))
+            self.root.after(0, lambda: self._log(msg))
+
+        _status("LibreOffice 자동 설치를 시작합니다...")
+        ok = download_and_install_libreoffice(status_callback=_status)
+
+        if not ok:
+            self.root.after(0, lambda: messagebox.showerror(
+                "설치 실패",
+                "LibreOffice 자동 설치에 실패했습니다.\n\n"
+                "https://www.libreoffice.org 에서 직접 설치해 주세요.",
+            ))
+            self.root.after(0, lambda: self.btn_convert.config(state="normal"))
+            self.converting = False
+            return
+
+        soffice = find_soffice()
+        if not soffice:
+            self.root.after(0, lambda: messagebox.showerror(
+                "오류", "설치 후에도 LibreOffice를 찾을 수 없습니다."
+            ))
+            self.root.after(0, lambda: self.btn_convert.config(state="normal"))
+            self.converting = False
+            return
+
+        self.root.after(0, lambda: self._log(""))
+        self._convert_worker(soffice)
 
     def _convert_worker(self, soffice):
         total = len(self.files)
