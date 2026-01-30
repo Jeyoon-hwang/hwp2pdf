@@ -485,20 +485,12 @@ class HwpToPdfApp:
             base_name = os.path.splitext(name)[0]
             expected_pdf = os.path.join(outdir, base_name + ".pdf")
 
-            # HWP/HWPX 입력 필터 결정
-            ext = os.path.splitext(name)[1].lower()
-            if ext == ".hwpx":
-                infilter = "HWPX File"
-            else:
-                infilter = "HWP File"
-
             try:
                 cmd = [
                     soffice,
                     "--headless",
                     "--norestore",
                     f"-env:UserInstallation={profile_url}",
-                    f"--infilter={infilter}",
                     "--convert-to", "pdf",
                     "--outdir", outdir,
                     filepath,
